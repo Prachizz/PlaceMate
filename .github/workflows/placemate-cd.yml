@@ -1,0 +1,95 @@
+name: PlaceMate Continuous Deployment (CD) - Vercel Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: placemate-cd-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Main Quality Gates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run TypeScript Strict Check
+        run: npm run typecheck
+
+      - name: Run All Automated Tests
+        run: npm run test:ci
+
+      - name: Verify Production Compilation
+        run: npm run build
+        env:
+          DATABASE_URL: "postgresql://dummy:dummy@localhost:5432/placemate"
+          JWT_SECRET: "cd_pipeline_verification_jwt_secret_key_32_characters"
+
+  deploy-production:
+    name: Deploy to Vercel Production
+    needs: [validate]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Configuration
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Build Prebuilt Production Artifacts
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Deploy Prebuilt Artifacts to Vercel Production
+        id: deploy
+        run: |
+          DEPLOY_URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "production_url=$DEPLOY_URL" >> $GITHUB_OUTPUT
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Deployment Audit Log
+        run: |
+          echo "=========================================================="
+          echo "PlaceMate Production Release Deployed Successfully!"
+          echo "Commit SHA: ${{ github.sha }}"
+          echo "Live Deployment URL: ${{ steps.deploy.outputs.production_url }}"
+          echo "Health Endpoint: ${{ steps.deploy.outputs.production_url }}/api/health"
+          echo "Prometheus Endpoint: ${{ steps.deploy.outputs.production_url }}/api/metrics"
+          echo "=========================================================="
