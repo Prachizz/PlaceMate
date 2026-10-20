@@ -24,6 +24,14 @@ jobs:
           node-version: 22.x
           cache: "npm"
 
+      - name: Diagnose npm Lockfile
+        run: |
+          node --version
+          npm --version
+          npm config get omit
+          npm config get optional
+          npm ls @emnapi/runtime @emnapi/core --package-lock-only || true
+
       - name: Install Dependencies
         run: npm ci
 
